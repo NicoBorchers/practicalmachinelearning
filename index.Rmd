@@ -6,25 +6,130 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = TRUE)
 ```
 
-## R Markdown
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+```{r library calls, include=FALSE}
+library(caret)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
 ```
 
-## Including Plots
+## Predicting "classe" of exercise with data from wearable devices
 
-You can also embed plots, for example:
+This is an R Markdown document showing the process of putting together a classification model, particularly a random forest model, to predict the exercise "classe" using different exercise characteristics as predictors.
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+# Load training and testing data
+
+Read data from urls and load to train and test data frames.
+Check dimensions to see how many rows and columns
+```{r}
+
+train <- read.csv('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv')
+test <- read.csv('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv')
+
+dim(train)
+dim(test)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+# Data cleaning
+
+First, check for NA values within train data set, and calculate % of NA values for each column,
+as there are 160 columns, we'll visualise a histogram.
+67 out of 160 columns have more than 80% of NA values.
+```{r}
+na_perc <- lapply(train, function(x) sum(length(which(is.na(x))))/sum(length(x)))  
+
+df_na_perc <- na_perc %>%
+  as.data.frame() %>%
+  gather(Col_name, perc) %>%
+  arrange(-perc)
+
+ggplot(df_na_perc,aes(x=perc)) + 
+    stat_bin(binwidth=0.2) +
+    ylim(0,100) +
+    stat_bin(binwidth=0.2, geom="text", aes(label=..count..), vjust=-1.5) +
+  xlab('Percentage of NA values') + ylab('Number of columns')
+```
+
+Remove all columns with more than 80% NA values in train set (all 67 cols with NAs removed, 93 cols left)
+```{r}
+train_no_nas <- train[,colSums(is.na(train)) < 0.8*nrow(train)]
+
+dim(train_no_nas)
+
+str(train_no_nas)
+```
+Check for columns with blank values, 33 additional columns are identified.
+```{r}
+blank_perc <- lapply(train_no_nas, function(x) sum(length(which(x == '')))/sum(length(x)))  
+
+df_blank_perc <- blank_perc %>%
+  as.data.frame() %>%
+  gather(Col_name, perc) %>%
+  arrange(-perc)
+
+ggplot(df_blank_perc,aes(x=perc)) + 
+    stat_bin(binwidth=0.2) +
+    ylim(0,100) +
+    stat_bin(binwidth=0.2, geom="text", aes(label=..count..), vjust=-1.5) +
+  xlab('Percentage of blank values') + ylab('Number of columns')
+```
+
+
+Remove all columns with more than 80% blank values in train set (33 cols removed)
+```{r}
+train_no_nas_no_blanks <- train_no_nas[,colSums(train_no_nas == '') < 0.8*nrow(train_no_nas)]
+
+dim(train_no_nas_no_blanks)
+
+str(train_no_nas_no_blanks)
+```
+
+Remove additional columns that are not going to be used as predictors
+```{r}
+data <- train_no_nas_no_blanks %>%
+  select(-X, -user_name, -raw_timestamp_part_1, -raw_timestamp_part_2, -cvtd_timestamp,
+         -new_window, -num_window)
+
+dim(data)
+
+str(data)
+```
+
+Split training data further into a training and validation set
+and run a random forest model
+```{r}
+set.seed(123)
+training <- sample(nrow(data), 0.7*nrow(data), replace = FALSE)
+TrainSet <- data[training,]
+ValidSet <- data[-training,]
+
+start <- Sys.time()
+
+# run a random forest model
+model_RF <- train(classe ~ ., method = 'rf', data = TrainSet)
+model_RF
+```
+
+Predict on validation set and check how our prediction performed: confusion matrix and accuracy.
+Accuracy on validation set is > 99%, so we will not explore further models.
+```{r}
+ValidSet$classe_predicted <- predict(model_RF, ValidSet)
+pred_validSet <-predict(model_RF, ValidSet)
+
+ValidSet %>% select(classe, classe_predicted) %>% table()
+
+rf_accuracy = sum(pred_validSet == ValidSet$classe) / length(pred_validSet)
+rf_accuracy
+```
+
+
+Predict on test set, and see assigned classes
+```{r}
+test$classe <- predict(model_RF, test)
+
+test %>% select(problem_id, classe)
+```
